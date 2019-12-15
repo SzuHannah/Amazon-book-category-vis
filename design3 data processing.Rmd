@@ -1,0 +1,471 @@
+---
+title: "design 3"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#library needed
+library(visNetwork)
+library(networkD3)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+library(purrr)
+library(ggiraph)
+#for tree
+library(data.tree)
+library(collapsibleTree)
+#for color
+library(RColorBrewer)
+```
+
+```{r}
+#data used finally:
+Bookworld<-readRDS("Bookworld2.RData")
+bookpci<-readRDS("bookpwithcatid.RData")
+nodename<-readRDS("nodehovertip2.RData")
+edges<-readRDS("edge2.RData")
+```
+
+```{r}
+book = read.csv("Books2.csv")
+#transform factor into character
+book%>%mutate_if(is.factor,as.character)->book
+#use id to replace original rownames
+book%>%remove_rownames%>%column_to_rownames(var="id")->book
+##make each row into a list
+book.list<-setNames(split(book,seq(nrow(book))),rownames(book))
+bookplot<-book%>%rownames_to_column(var="id")%>%select(id,name,productCount,alsoCount)
+Bookworld<-full_join(All,pathlengthwithname,by="id")
+```
+
+```{r}
+#create many dataframes with similar names--links
+n <- 4301
+lst <- replicate(n,tibble(y=numeric(), x=numeric()), simplify=FALSE)
+names(lst) <-  1:n
+nmy <- paste0('from')
+nmx <- paste0('to')
+links <- Map(function(x,y,z) {names(x) <- c(y,z); x}, lst, nmy, nmx)
+```
+
+```{r}
+#create from to list for all 4301 book categories
+for(i in 1:4301){
+  l<-gsub("[][()]","",book.list[[i]]$also)%>%
+    strsplit(",")%>%
+    unlist()%>%
+    parse_integer()
+
+  #loop through the numbers and add them to the data frame
+  for(j in 1:length(l)){
+    if(j %% 2 ==1){
+      links[[i]]<-add_row(links[[i]],from=l[j],to=l[j+1])
+    }
+    if(j%%2){
+      next
+    }
+  }
+}
+```
+
+
+```{r,echo=FALSE}
+##Create edge list(variable name:linkscount)
+#bind all the dataframes in the list for later counting(variable name: all), ref:https://stackoverflow.com/questions/2851327/convert-a-list-of-data-frames-into-one-data-frame
+all<-bind_rows(links,.id="column_label")
+#count all the pair occurance:https://dplyr.tidyverse.org/reference/tally.html
+allcount<-all%>%group_by(from,to)%>%add_tally()
+head(allcount)
+#pair occurance summarize table:https://stackoverflow.com/questions/24925306/counting-unique-pairs-of-categorical-variables-in-r
+allpairsum<-all%>%group_by(from,to)%>%summarize(Count=n())
+#links list with counts
+linkscount<-split(allcount,f=allcount$column_label)
+
+#select only from, to, n(i.e. the count) column for every dataframe
+for(i in 1:4301){
+  linkscount[[i]]<-linkscount[[i]]%>%select(from,to,n)%>%ungroup()
+}
+```
+
+```{r}
+##Create node list for all dataframes in the linkscount(variable name:nodelist)
+nodelist<-
+  lapply(linkscount,function(x){
+    fromlis<-x%>%
+      distinct(from)%>%
+      rename(label=from)
+    tolis<-x%>%
+      distinct(to)%>%
+      rename(label=to)  
+    full_join(
+      fromlis,tolis,by="label"
+    )
+  })
+
+```
+
+```{r}
+##use node.plot and edge.plot to plot
+#creates plottable nodes and edges for every book category
+node.plot<-
+  lapply(nodelist,function(x){
+    x%>%
+    rowid_to_column("id")
+  })
+
+#merge edges for every book category
+maptry<-map2(linkscount, node.plot, left_join, by = c("from"="label"))
+maptry<-lapply(maptry,function(x)x%>%rename(f=id))
+map2try<-map2(maptry,node.plot,left_join, by=c("to"="label"))
+map2try<-lapply(map2try,function(x)x%>%rename(t=id))
+
+edge.plot<-lapply(map2try,function(x)x%>%select(f,t,n)%>%rename(from=f,to=t,value=n))
+bookpwithcatid<-bookp%>%mutate(catid=paste(name,id))
+#bfilt<-bookpwithcatid%>%
+  #filter(catid=="Books 0")%>%
+  #pull(id)
+
+#test-->correct!
+#visNetwork(nodename.plot[["100"]],edge.plot[["100"]])
+#change label to category name
+nodename.plot<-lapply(node.plot,function(x)
+  x%>%
+  mutate_each(funs(key$name[match(.,key$id)]), label))
+
+nodeid.hover<-lapply(node.plot,function(x)
+  x%>%
+  add_column(productCount=x$label,alsoCount = x$label,idorg= x$label)%>%
+  mutate_each(funs(keyprodalso$productCount[match(.,keyprodalso$id)]),productCount)%>%
+  mutate_each(funs(keyprodalso$alsoCount[match(.,keyprodalso$id)]),alsoCount)
+  )
+
+nodename.hover<-lapply(nodeid.hover,function(x)
+  x%>%
+  mutate_each(funs(key$name[match(.,key$id)]), label))
+
+nodename.hovertip<-lapply(nodename.hover,function(x)
+  mutate(x,title=paste("<p>",paste(label,idorg),"<br>Product Count: ",productCount,"<br>Also Count: ",alsoCount,"</p>")))
+
+bookpci%>%filter(id==3)%>%pull(id)%>%as.numeric()
+
+print(alsoc)
+```
+
+```{r}
+#color
+levelcol<-brewer.pal(9,"Set1")
+brewer.pal(9,"Set1")[1]
+species<-read.csv("https://apps.fs.usda.gov/fia/datamart/CSV/REF_SPECIES_GROUP.csv")
+```
+
+
+```{r}
+#reference:https://www.jessesadler.com/post/network-analysis-with-r/
+#practice: create a visnetwork for df100
+#node
+nodes_df100<-nodelist[[3]]%>%rowid_to_column("id")
+linkscount[[3]]#per_route
+edges_df100<-linkscount[[3]]%>%
+  left_join(nodes_df100,by=c("from"="label"))%>%
+  rename(f=id)
+edges_df100<-edges_df100%>%
+  left_join(nodes_df100,by=c("to"="label"))%>%
+  rename(t=id)
+
+
+#edges
+edges_df100<-select(edges_df100,f,t,n)%>%
+  rename(from=f,to=t)#rename f column to "from"; t column to "to"
+visNetwork(nodes_df100,edges_df100)
+
+#practice: create a d3 network for df100
+#d3node
+nodes_d3_df100<-nodes_df100%>%mutate(id=id-1)
+edges_d3_df100<-edges_df100%>%mutate(from=from-1,to=to-1)%>%mutate(n=n/10)#make the n encoding appears to be thinner
+edges_d3_df100
+forceNetwork(Links=edges_d3_df100,Nodes=nodes_d3_df100,Source="from",Target="to",NodeID="label",Group="id",Value="n",opacity=1,fontSize=16,zoom=TRUE)
+```
+
+```{r}
+#collapsible nodes/interactive selection for visnetwork: https://datastorm-open.github.io/visNetwork/options.html
+#interaction r d3 network:http://kateto.net/network-visualization
+#flexdashboard for multiple graph layout:https://stackoverflow.com/questions/43519451/r-visnetwork-multiple-graph-layout
+#r flexdashboard example:https://github.com/wesslen/RVisTutorial/blob/master/NetworkFlexDash/NetworkDashboard.Rmd
+#D3tree show me shiny:https://www.showmeshiny.com/d3tree/
+```
+
+```{r}
+#practic treemap
+#library(treemap)
+# tidy up data for making tree(use book.tree, bookcats)
+book.prep<-book%>%
+  rownames_to_column("id")%>%
+  select(id,name,productCount,parent,pathName,alsoCount)%>%
+  mutate_at(vars(parent),as.factor)
+
+#for calculating length of path
+book.org<-book%>%
+  rownames_to_column("id")%>%
+  select(id,name,productCount,parent,pathName)%>%
+  mutate_at(vars(parent),as.factor)
+
+#calculate path length for each category
+pathlength = tibble(pathl = numeric())
+
+pat = ", "
+for(i in 1:4301){
+  strcalc<-book.org$pathName[i]%>%
+    strsplit(" ,  ")%>%
+    unlist()%>%
+    parse_character()
+  pathlength<-pathlength%>%add_row(pathl=length(strcalc))
+}
+
+pathlengthwithname<-rownames_to_column(pathlength,var = "id")%>%
+  mutate(id = as.numeric(id)-1)%>%
+  mutate(id = as.character(id))
+maxpathl = max(pathlength$pathl)#longest length: 8
+
+#correct way to separate
+for(i in 1:4301){
+  strtry<-book.prep$pathName[i]
+  stfin<-strtry%>%strsplit(" ,  ")%>%
+    unlist()%>%
+    parse_character()
+  book.prep$pathName[i]<-paste(stfin,collapse="/")
+}
+
+#this was wrong
+#pat = ", "
+#for(i in 1:4301){
+  #strtry<-gsub("[]['']","",book.prep$pathName[i])%>%
+    #strsplit(", ")%>%
+    #unlist()%>%
+    #parse_character()
+  #str<-toString(strtry)
+  #book.prep$pathName[i]<-str_replace_all(str,pat,"/")
+#}
+
+book.prep$pathString<-paste("All",
+                            book.prep$pathName,
+                            sep= "/")
+
+
+#key to match parent ID to category name
+key = book.prep%>%
+  select(id,name)
+keyprodalso=book.prep%>%
+  select(id,name,productCount,alsoCount)
+
+book.prep2<-book.prep%>%
+  mutate_each(funs(key$name[match(.,key$id)]), parent)
+
+book.tree<-book.prep2%>%
+  select(-pathName)%>%
+  mutate_at(vars(parent),as.factor)%>%
+  mutate_at(vars(name),as.factor)
+
+#separate pathName into subgroups
+All<-book.prep2%>%
+  separate(pathName,c("level_1","level_2","level_3","level_4","level_5","level_6","level_7"),sep = "/")%>%
+  mutate_at(vars(parent),as.factor)%>%
+  mutate_at(vars(name),as.factor)
+All
+```
+
+```{r}
+warp
+#plot collapsible Tree with All data
+collapsibleTree(
+  All,
+  hierarchy=c("level_1","level_2","level_3","level_4","level_5","level_6","level_7")
+)
+
+#reasonable way to do hierarchy: needs to spread path's nodes into different columns:
+#ex. maingroup/subgroup/subsubgroup/subsubsubgroup...
+```
+
+```{r}
+##try to print out the book category tree
+head(book.tree)
+bookcats<-as.Node(book.tree,pathName = "pathString",pathDelimiter="/")#book category nodes
+print(bookcats,"name","productCount",limit = 300)
+bookcatsdf<-ToDataFrameTypeCol(bookcats,'productCount','id','name','alsoCount')
+
+
+```
+
+```{r}
+#try D3 partition R:https://cran.r-project.org/web/packages/D3partitionR/README.html
+#decide not to use this..cannot seem to get it work('cause data form is not correct)
+## Reading data
+library(titanic)
+titanic_data = fread("train.csv")
+##Agregating data to have unique sequence for the 4 variables
+var_names=c('Sex','Embarked','Pclass','Survived')
+titanic_data
+data_plot=titanic_data[,.N,by=var_names]
+data_plot[,(var_names):=lapply(var_names,function(x){data_plot[[x]]=paste0(x,' ',data_plot[[x]])
+  })]
+data_plot
+book.treesubs.plot=book.treesubs%>%select(productCount,sub1,sub2,sub3,sub4,sub5,sub6,sub7,sub8)
+
+var_names2 = c('sub1','sub2','sub3','sub4','sub5','sub6','sub7','sub8')
+book.treesubs.plot = data.table(book.treesubs.plot)
+book.treesubs.plot[,(var_names2):=lapply(var_names2,function(x){book.treesubs.plot[[x]]=paste0(x,' ',book.treesubs.plot[[x]])
+  })]
+book.treesubs.plot
+## Plotting the chart
+library("magrittr")
+D3partitionR() %>%
+  add_data(book.treesubs.plot,count = 'productCount',steps=c('sub1','sub2','sub3','sub4','sub5','sub6','sub7','sub8')) %>%
+  add_title('Book') %>%
+  plot()
+```
+
+```{r,echo=FALSE}
+#practice: try to create nodelist
+#ungroup dataframe
+a<-linkscount[[2]]%>%ungroup()
+#source node 
+sources<-a%>%
+  distinct(from)%>%
+  rename(label=from)
+#destination node
+destinations<-a%>%
+  distinct(to)%>%
+  rename(label=to)
+#all nodes
+nodes<-full_join(sources,destinations,by="label")
+
+#Practice:create source list for all
+sourcetry<-
+  lapply(linkscount,function(x){
+    x%>%
+    distinct(from)%>%
+    rename(label=from)
+  })
+#Practice: Create node list for all
+nodetry<-
+  lapply(linkscount,function(x){
+    fromtry<-x%>%
+      distinct(from)%>%
+      rename(label=from)
+    totry<-x%>%
+      distinct(to)%>%
+      rename(label=to)  
+    full_join(
+      fromtry,totry,by="label"
+    )
+  })
+
+
+```
+
+```{r}
+#practice: try to make id=1 "also list" into from, to data frame
+id.1_also=book.list$`1`$also #same as: book.list[[1]]$also
+id.1_also_int<-gsub("[][()]","",id.1_also)%>%
+  strsplit(",")%>%
+  unlist()%>%
+  parse_integer()
+length(id.1_also_int)
+#id.1's links
+id.1_also_tofrom<-tibble(from=numeric(),to=numeric())
+
+#loop through the numbers and add them to the data frame
+for(i in 1:length(id.1_also_int)){
+  if(i %% 2 ==1){
+    id.1_also_tofrom<-add_row(id.1_also_tofrom,from=id.1_also_int[i],to=id.1_also_int[i+1])
+  }
+  if(i%%2){
+    next
+  }
+}
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+#practice:
+#try to make ['Books', 'Travel'] into Books/Travel
+Stringb<-"['Books', 'Travel']"
+strprac<-gsub("[]['']","",Stringb)%>%
+  strsplit(", ")%>%
+  unlist()%>%
+  parse_character()
+
+str1<-toString(strprac)
+pat = ", "
+strfin<-str_replace(str1,pat,"/")
+
+#try to separate [(12,13),(14,15)]
+string<-"[(12,13),(14,15)]"
+#take out [] and ()
+intpractice<-gsub("[][()]", "",string)%>%strsplit(",")%>%unlist()%>%parse_integer()
+intpractice
+#create an empty dataframe
+data<-tibble(from=numeric(),to=numeric())
+length(intpractice)
+#loop through the numbers and add them to the data frame
+for(i in 1:length(intpractice)){
+  if(i %% 2 ==1){
+    data<-add_row(data,from=intpractice[i],to=intpractice[i+1])
+  }
+  if(i%%2){
+    next
+  }
+}
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+#practice create many dataframe with similar names
+#ref:https://stackoverflow.com/questions/29353613/r-creating-multiple-data-frames-with-names
+n <- 100
+lst <- replicate(n,data.frame(y=character(), x=numeric(),
+                     stringsAsFactors=FALSE), simplify=FALSE)
+
+names(lst) <- paste0('df', 1:n)
+nmy <- paste0('y', 1:n)
+nmx <- paste0('x', 1:n)
+lst1 <- Map(function(x,y,z) {names(x) <- c(y,z); x}, lst, nmy, nmx)
+
+```
+
+```{r}
+##practice matched pairs:https://stackoverflow.com/questions/26244685/count-every-possible-pair-of-values-in-a-column-grouped-by-multiple-columns
+#Step 1: Construct sample data of your dimensions approximately:
+require(data.table) ## 1.9.4+
+set.seed(1L)        ## For reproducibility
+N = 2724098L
+motif = sample(paste("motif", 1:1716, sep="_"), N, TRUE)
+id = sample(83509, N, TRUE)
+DT = data.table(id, motif)
+#Step 2: Pre-processing:
+DT = unique(DT) ## IMPORTANT: not to have duplicate motifs within same id
+setorder(DT)    ## IMPORTANT: motifs are ordered within id as well
+setkey(DT, id)  ## reset key to 'id'. Motifs ordered within id from previous step
+DT[, runlen := .I]
+#Step 3: Solution:
+ans = DT[DT, {
+              tmp = runlen < i.runlen; 
+              list(motif[tmp], i.motif[any(tmp)])
+             }, 
+      by=.EACHI][, .N, by="V1,V2"]
+DT
+ans
+```
+
+
+
+
+
+
